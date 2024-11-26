@@ -1,78 +1,172 @@
+# src/sql_parser.py
 import pyparsing as pp
 
 class SQLParser:
     def __init__(self):
-        # 定义数据类型，支持INT和STRING
-        self.integer = pp.Regex(r'\d+').setName("integer")
-        self.identifier = pp.Word(pp.alphas + "_", pp.alphas + "_0123456789").setName("identifier")
-        self.column_name = self.identifier
-        self.value = pp.QuotedString("'") | self.integer  # 支持字符串和整数类型的值
+        self._build_grammar()
 
-        # SQL语句的各个部分
-        self.create_table_stmt = self._create_table_stmt()
-        self.insert_stmt = self._insert_stmt()
-        self.select_stmt = self._select_stmt()
+    def _build_grammar(self):
+        # 基本元素
+        identifier = pp.Word(pp.alphas, pp.alphanums + "_").setName("identifier")
+        integer = pp.Word(pp.nums).setName("integer")
+        string = pp.QuotedString("'").setName("string")
+        value = integer | string
 
-    def _create_table_stmt(self):
-        # CREATE TABLE语句
-        create_keyword = pp.Suppress(pp.Keyword("CREATE TABLE", caseless=True))
-        table_name = self.identifier
-        lparen = pp.Suppress("(")
-        rparen = pp.Suppress(")")
-        comma = pp.Suppress(",")
+        # 数据类型
+        datatype = pp.Keyword("INT", caseless=True) | pp.Keyword("STRING", caseless=True)
 
-        # 定义列名和数据类型，并将每个列定义分组
-        column_def = pp.Group(self.column_name + (pp.Keyword("INT", caseless=True) | pp.Keyword("STRING", caseless=True)))
-        column_defs = pp.Group(column_def + pp.ZeroOrMore(comma + column_def))  # 支持多个列
+        # 列定义
+        column_def = pp.Group(identifier("name") + datatype("type"))
+        column_def_list = pp.delimitedList(column_def)
 
-        return create_keyword + table_name + lparen + column_defs + rparen
+        # CREATE TABLE 语句
+        create_table = (
+            pp.Keyword("CREATE TABLE", caseless=True)("action")
+            + identifier("table_name")
+            + pp.Suppress("(")
+            + column_def_list("columns")
+            + pp.Suppress(")")
+        )
 
-    def _insert_stmt(self):
-        # INSERT INTO语句
-        insert_keyword = pp.Suppress(pp.Keyword("INSERT INTO", caseless=True))
-        table_name = self.identifier
-        values_keyword = pp.Suppress(pp.Keyword("VALUES", caseless=True))
-        lparen = pp.Suppress("(")
-        rparen = pp.Suppress(")")
-        value_list = pp.Group(pp.delimitedList(self.value))  # 将值列表分组
+        # INSERT INTO 语句
+        insert_into = (
+            pp.Keyword("INSERT INTO", caseless=True)("action")
+            + identifier("table_name")
+            + pp.Keyword("VALUES", caseless=True)
+            + pp.Suppress("(")
+            + pp.Group(pp.delimitedList(value))("values")
+            + pp.Suppress(")")
+        )
 
-        return insert_keyword + table_name + values_keyword + lparen + value_list + rparen
+        # SELECT 语句（包括 SELECT *）
+        select = (
+            pp.Keyword("SELECT", caseless=True)("action")
+            + (pp.Keyword("*")("columns") | pp.Group(pp.delimitedList(identifier))("columns"))
+            + pp.Keyword("FROM", caseless=True)
+            + identifier("table_name")
+            + pp.Optional(
+                pp.Keyword("WHERE", caseless=True)
+                + identifier("where_column")
+                + pp.oneOf("= < >")("operator")
+                + value("where_value")
+            )
+        )
 
-    def _select_stmt(self):
-        # SELECT语句
-        select_keyword = pp.Suppress(pp.Keyword("SELECT", caseless=True))
-        from_keyword = pp.Suppress(pp.Keyword("FROM", caseless=True))
-        where_keyword = pp.Suppress(pp.Keyword("WHERE", caseless=True))
-        comma = pp.Suppress(",")
-        
-        # 定义列列表，并将其分组
-        column_list = pp.Group(self.column_name + pp.ZeroOrMore(comma + self.column_name))  # 支持多个列
-        
-        # 定义WHERE条件，并将其分组
-        condition = pp.Group(self.column_name + pp.oneOf("= < >") + self.value)
-        
-        return select_keyword + column_list + from_keyword + self.identifier + pp.Optional(where_keyword + condition)
+        # ALTER TABLE 语句
+        alter_table = (
+            pp.Keyword("ALTER TABLE", caseless=True)("action")
+            + identifier("table_name")
+            + (
+                pp.Keyword("ADD COLUMN", caseless=True)("operation")
+                + identifier("column_name")
+                + datatype("column_type")
+                | pp.Keyword("DROP COLUMN", caseless=True)("operation")
+                + identifier("column_name")
+                | pp.Keyword("MODIFY COLUMN", caseless=True)("operation")
+                + identifier("column_name")
+                + datatype("column_type")
+            )
+        )
 
-    def parse_create(self, sql):
+        # DELETE FROM 语句
+        delete_from = (
+            pp.Keyword("DELETE FROM", caseless=True)("action")
+            + identifier("table_name")
+            + pp.Optional(
+                pp.Keyword("WHERE", caseless=True)
+                + identifier("where_column")
+                + pp.oneOf("= < >")("operator")
+                + value("where_value")
+            )
+        )
+
+        # UPDATE 语句
+        update = (
+            pp.Keyword("UPDATE", caseless=True)("action")
+            + identifier("table_name")
+            + pp.Keyword("SET", caseless=True)
+            + pp.delimitedList(
+                pp.Group(identifier("column") + pp.Suppress("=") + value("value"))
+            )("set_values")
+            + pp.Optional(
+                pp.Keyword("WHERE", caseless=True)
+                + identifier("where_column")
+                + pp.oneOf("= < >")("operator")
+                + value("where_value")
+            )
+        )
+
+        # DROP TABLE 语句
+        drop_table = (
+            pp.Keyword("DROP TABLE", caseless=True)("action")
+            + identifier("table_name")
+        )
+
+        # 组合语法
+        self.grammar = create_table | insert_into | select | alter_table | delete_from | update | drop_table
+
+    def parse(self, sql):
         try:
-            result = self.create_table_stmt.parseString(sql, parseAll=True)
-            return result
-        except pp.ParseException as e:
-            print(f"CREATE TABLE语法错误: {e}")
+            result = self.grammar.parseString(sql, parseAll=True)
+            action = result.get("action").upper()
+
+            if action == "CREATE TABLE":
+                columns = {col["name"]: col["type"].upper() for col in result["columns"]}
+                return {"action": "CREATE TABLE", "table_name": result["table_name"], "columns": columns}
+
+            elif action == "INSERT INTO":
+                values = result["values"].asList()
+                return {"action": "INSERT INTO", "table_name": result["table_name"], "values": values}
+
+            elif action == "SELECT":
+                if result["columns"] == "*":
+                    columns = "*"
+                else:
+                    columns = result["columns"].asList()
+                where = None
+                if "where_column" in result:
+                    where = (result["where_column"], result["operator"], result["where_value"])
+                return {"action": "SELECT", "table_name": result["table_name"], "columns": columns, "where": where}
+
+            elif action == "ALTER TABLE":
+                operation = result["operation"].upper()
+                parsed = {"action": "ALTER TABLE", "table_name": result["table_name"], "operation": operation}
+                if operation == "ADD COLUMN":
+                    parsed["column_name"] = result["column_name"]
+                    parsed["column_type"] = result["column_type"].upper()
+                elif operation == "DROP COLUMN":
+                    parsed["column_name"] = result["column_name"]
+                elif operation == "MODIFY COLUMN":
+                    parsed["column_name"] = result["column_name"]
+                    parsed["column_type"] = result["column_type"].upper()
+                return parsed
+
+            elif action == "DELETE FROM":
+                where = None
+                if "where_column" in result:
+                    where = (result["where_column"], result["operator"], result["where_value"])
+                return {"action": "DELETE FROM", "table_name": result["table_name"], "where": where}
+
+            elif action == "UPDATE":
+                set_values = {s["column"]: self._convert_value(s["value"]) for s in result["set_values"]}
+                where = None
+                if "where_column" in result:
+                    where = (result["where_column"], result["operator"], self._convert_value(result["where_value"]))
+                return {"action": "UPDATE", "table_name": result["table_name"], "set_values": set_values, "where": where}
+
+            elif action == "DROP TABLE":
+                return {"action": "DROP TABLE", "table_name": result["table_name"]}
+
+            else:
+                print(f"Unsupported SQL action: {action}")
+                return None
+
+        except pp.ParseException as pe:
+            print(f"SQL Parsing Error: {pe}")
             return None
 
-    def parse_insert(self, sql):
+    def _convert_value(self, value):
         try:
-            result = self.insert_stmt.parseString(sql, parseAll=True)
-            return result
-        except pp.ParseException as e:
-            print(f"INSERT语法错误: {e}")
-            return None
-
-    def parse_select(self, sql):
-        try:
-            result = self.select_stmt.parseString(sql, parseAll=True)
-            return result
-        except pp.ParseException as e:
-            print(f"SELECT语法错误: {e}")
-            return None
+            return int(value)
+        except ValueError:
+            return value.strip("'")

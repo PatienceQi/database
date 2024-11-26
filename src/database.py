@@ -1,115 +1,193 @@
-import json
-
-class Table:
-    def __init__(self, name, columns):
-        self.name = name
-        self.columns = columns  # dict of column_name: data_type
-        self.rows = []
-
-    def insert(self, row):
-        if len(row) != len(self.columns):
-            raise ValueError("Row has incorrect number of columns.")
-        self.rows.append(row)
-
-    def to_dict(self):
-        return {
-            'name': self.name,
-            'columns': self.columns,
-            'rows': self.rows
-        }
-
-    @staticmethod
-    def from_dict(data):
-        table = Table(data['name'], data['columns'])
-        table.rows = data['rows']
-        return table
-#Table类用于表示数据库中的一张表，包含表名、列定义和行数据。
-#insert方法用于向表中插入新行。
-#to_dict和from_dict方法用于将表数据序列化和反序列化，以支持数据持久化。
-
+# src/database.py
 
 class Database:
     def __init__(self):
         self.tables = {}
 
-    def create_table(self, name, columns):
-        if name in self.tables:
-            raise ValueError(f"Table {name} already exists.")
-        self.tables[name] = Table(name, columns)
+    def create_table(self, table_name, columns):
+        if table_name in self.tables:
+            raise ValueError(f"Table '{table_name}' already exists.")
+        self.tables[table_name] = Table(table_name, columns)
+        print(f"Table '{table_name}' created with columns: {columns}")
 
-    def drop_table(self, name):
-        if name not in self.tables:
-            raise ValueError(f"Table {name} does not exist.")
-        del self.tables[name]
+    def get_table(self, table_name):
+        return self.tables.get(table_name)
 
-    def insert_into(self, table_name, row):
-        if table_name not in self.tables:
-            raise ValueError(f"Table {table_name} does not exist.")
-        self.tables[table_name].insert(row)
+    def insert_into(self, table_name, values):
+        table = self.get_table(table_name)
+        if not table:
+            raise ValueError(f"Table '{table_name}' does not exist.")
+        table.insert_row(values)
 
     def select_from(self, table_name, columns=None, where=None):
+        table = self.get_table(table_name)
+        if not table:
+            raise ValueError(f"Table '{table_name}' does not exist.")
+        return table.select(columns, where)
+
+    def delete_from(self, table_name, where=None):
+        table = self.get_table(table_name)
+        if not table:
+            raise ValueError(f"Table '{table_name}' does not exist.")
+        table.delete_rows(where)
+
+    def update(self, table_name, set_values, where=None):
+        table = self.get_table(table_name)
+        if not table:
+            raise ValueError(f"Table '{table_name}' does not exist.")
+        table.update_rows(set_values, where)
+
+    def drop_table(self, table_name):
         if table_name not in self.tables:
-            raise ValueError(f"Table {table_name} does not exist.")
-        table = self.tables[table_name]
-        if columns is None:
-            selected_columns = list(table.columns.keys())
+            raise ValueError(f"Table '{table_name}' does not exist.")
+        del self.tables[table_name]
+        print(f"Dropped table '{table_name}'.")
+
+class Table:
+    def __init__(self, name, columns):
+        self.name = name
+        self.columns = {col_name: col_type.upper() for col_name, col_type in columns.items()}
+        self.column_names = list(columns.keys())
+        self.rows = []
+
+    def insert_row(self, values):
+        if len(values) != len(self.column_names):
+            raise ValueError("Column count doesn't match value count.")
+        # 类型转换
+        converted_values = []
+        for value, col_name in zip(values, self.column_names):
+            col_type = self.columns[col_name]
+            try:
+                if col_type == 'INT':
+                    converted_values.append(int(value))
+                else:
+                    converted_values.append(str(value))
+            except ValueError:
+                raise ValueError(f"Invalid integer value for column '{col_name}': {value}")
+        self.rows.append(converted_values)
+        print(f"Inserted into '{self.name}': {converted_values}")
+
+    def select(self, columns, where=None):
+        # 确认列是否存在
+        if columns == "*":
+            selected_columns = self.column_names
         else:
+            for col in columns:
+                if col not in self.column_names:
+                    raise ValueError(f"Column '{col}' does not exist in table '{self.name}'.")
             selected_columns = columns
 
-        # Get column indices
-        column_indices = [list(table.columns.keys()).index(col) for col in selected_columns]
+        # 获取列索引
+        col_indices = [self.column_names.index(col) for col in selected_columns]
 
-        # Filter rows based on 'where' condition
-        if where:
-            filtered_rows = []
-            for row in table.rows:
-                if self._evaluate_where(row, table, where):
-                    filtered_rows.append(row)
-        else:
-            filtered_rows = table.rows
-
-        # Select specified columns
         result = []
-        for row in filtered_rows:
-            selected_row = [row[idx] for idx in column_indices]
+        for row in self.rows:
+            if where:
+                where_col, operator, where_val = where
+                if where_col not in self.column_names:
+                    raise ValueError(f"Column '{where_col}' does not exist in table '{self.name}'.")
+                where_idx = self.column_names.index(where_col)
+                cell_value = row[where_idx]
+                if not self._evaluate_condition(cell_value, operator, where_val):
+                    continue
+            selected_row = [row[idx] for idx in col_indices]
             result.append(selected_row)
-
         return result
 
-    def _evaluate_where(self, row, table, where):
-        # 简单的WHERE条件解析，支持单个条件，例如 "age > 20"
-        column, operator, value = where
-        col_idx = list(table.columns.keys()).index(column)
-        cell = row[col_idx]
-        try:
-            # 尝试将值转换为数字类型
-            value = float(value)
-            cell = float(cell)
-        except ValueError:
-            # 如果无法转换，保持字符串类型
-            pass
+    def delete_rows(self, where=None):
+        initial_count = len(self.rows)
+        if where:
+            where_col, operator, where_val = where
+            if where_col not in self.column_names:
+                raise ValueError(f"Column '{where_col}' does not exist in table '{self.name}'.")
+            where_idx = self.column_names.index(where_col)
+            new_rows = []
+            for row in self.rows:
+                cell_value = row[where_idx]
+                if not self._evaluate_condition(cell_value, operator, where_val):
+                    new_rows.append(row)
+            self.rows = new_rows
+        else:
+            # 删除所有行
+            self.rows = []
+        deleted_count = initial_count - len(self.rows)
+        print(f"Deleted {deleted_count} row(s) from '{self.name}'.")
+
+    def update_rows(self, set_values, where=None):
+        update_count = 0
+        for row in self.rows:
+            if where:
+                where_col, operator, where_val = where
+                if where_col not in self.column_names:
+                    raise ValueError(f"Column '{where_col}' does not exist in table '{self.name}'.")
+                where_idx = self.column_names.index(where_col)
+                cell_value = row[where_idx]
+                if not self._evaluate_condition(cell_value, operator, where_val):
+                    continue
+            for col, val in set_values.items():
+                if col not in self.column_names:
+                    raise ValueError(f"Column '{col}' does not exist in table '{self.name}'.")
+                idx = self.column_names.index(col)
+                col_type = self.columns[col]
+                try:
+                    if col_type == 'INT':
+                        row[idx] = int(val)
+                    else:
+                        row[idx] = str(val)
+                except ValueError:
+                    raise ValueError(f"Invalid integer value for column '{col}': {val}")
+            update_count += 1
+        print(f"Updated {update_count} row(s) in '{self.name}'.")
+
+    def _evaluate_condition(self, left, operator, right):
+        if isinstance(left, str) and isinstance(right, str):
+            pass  # 字符串比较
+        elif isinstance(left, int) and isinstance(right, int):
+            pass  # 整数比较
+        else:
+            # 尝试类型转换
+            try:
+                if isinstance(left, str):
+                    left = int(left)
+                if isinstance(right, str):
+                    right = int(right)
+            except ValueError:
+                pass  # 保持原有类型
 
         if operator == '=':
-            return cell == value
+            return left == right
         elif operator == '<':
-            return cell < value
+            return left < right
         elif operator == '>':
-            return cell > value
+            return left > right
         else:
-            raise ValueError(f"Unsupported operator: {operator}")
+            raise ValueError(f"Unsupported operator '{operator}'")
+    
+    def add_column(self, column_name, column_type):
+        if column_name in self.columns:
+            print(f"Column '{column_name}' already exists in table '{self.name}'.")
+            return
+        self.columns[column_name] = column_type.upper()
+        self.column_names.append(column_name)
+        # 为现有行添加默认值 None
+        for row in self.rows:
+            row.append(None)
+        print(f"Added column '{column_name}' of type '{column_type}' to table '{self.name}'")
 
-    def save_to_disk(self, filepath):
-        data = {table_name: table.to_dict() for table_name, table in self.tables.items()}
-        with open(filepath, 'w') as f:
-            json.dump(data, f, indent=4)
+    def drop_column(self, column_name):
+        if column_name not in self.columns:
+            print(f"Column '{column_name}' does not exist in table '{self.name}'.")
+            return
+        idx = self.column_names.index(column_name)
+        del self.columns[column_name]
+        self.column_names.remove(column_name)
+        for row in self.rows:
+            del row[idx]
+        print(f"Dropped column '{column_name}' from table '{self.name}'")
 
-    def load_from_disk(self, filepath):
-        with open(filepath, 'r') as f:
-            data = json.load(f)
-        self.tables = {name: Table.from_dict(tbl) for name, tbl in data.items()}
-
-#Database类管理多个Table实例，提供创建、删除表和数据操作的方法。
-#insert_into方法用于向指定表插入数据。
-#select_from方法用于从指定表查询数据，支持选择特定列和简单的WHERE条件。
-#_evaluate_where方法用于评估单个WHERE条件。
-#save_to_disk和load_from_disk方法用于将数据库状态保存到磁盘或从磁盘加载。
+    def modify_column(self, column_name, new_column_type):
+        if column_name not in self.columns:
+            print(f"Column '{column_name}' does not exist in table '{self.name}'.")
+            return
+        self.columns[column_name] = new_column_type.upper()
+        print(f"Modified column '{column_name}' to type '{new_column_type}' in table '{self.name}'")

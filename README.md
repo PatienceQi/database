@@ -17,4 +17,4 @@
 请参考`requirements.txt`安装项目依赖，并运行`main.py`启动系统。
 
 ## 开发人员
-- 你的名字
+- Qi Patience

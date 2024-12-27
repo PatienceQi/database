@@ -1,172 +1,148 @@
 # src/sql_parser.py
-import pyparsing as pp
+
+import re
 
 class SQLParser:
-    def __init__(self):
-        self._build_grammar()
-
-    def _build_grammar(self):
-        # 基本元素
-        identifier = pp.Word(pp.alphas, pp.alphanums + "_").setName("identifier")
-        integer = pp.Word(pp.nums).setName("integer")
-        string = pp.QuotedString("'").setName("string")
-        value = integer | string
-
-        # 数据类型
-        datatype = pp.Keyword("INT", caseless=True) | pp.Keyword("STRING", caseless=True)
-
-        # 列定义
-        column_def = pp.Group(identifier("name") + datatype("type"))
-        column_def_list = pp.delimitedList(column_def)
-
-        # CREATE TABLE 语句
-        create_table = (
-            pp.Keyword("CREATE TABLE", caseless=True)("action")
-            + identifier("table_name")
-            + pp.Suppress("(")
-            + column_def_list("columns")
-            + pp.Suppress(")")
-        )
-
-        # INSERT INTO 语句
-        insert_into = (
-            pp.Keyword("INSERT INTO", caseless=True)("action")
-            + identifier("table_name")
-            + pp.Keyword("VALUES", caseless=True)
-            + pp.Suppress("(")
-            + pp.Group(pp.delimitedList(value))("values")
-            + pp.Suppress(")")
-        )
-
-        # SELECT 语句（包括 SELECT *）
-        select = (
-            pp.Keyword("SELECT", caseless=True)("action")
-            + (pp.Keyword("*")("columns") | pp.Group(pp.delimitedList(identifier))("columns"))
-            + pp.Keyword("FROM", caseless=True)
-            + identifier("table_name")
-            + pp.Optional(
-                pp.Keyword("WHERE", caseless=True)
-                + identifier("where_column")
-                + pp.oneOf("= < >")("operator")
-                + value("where_value")
-            )
-        )
-
-        # ALTER TABLE 语句
-        alter_table = (
-            pp.Keyword("ALTER TABLE", caseless=True)("action")
-            + identifier("table_name")
-            + (
-                pp.Keyword("ADD COLUMN", caseless=True)("operation")
-                + identifier("column_name")
-                + datatype("column_type")
-                | pp.Keyword("DROP COLUMN", caseless=True)("operation")
-                + identifier("column_name")
-                | pp.Keyword("MODIFY COLUMN", caseless=True)("operation")
-                + identifier("column_name")
-                + datatype("column_type")
-            )
-        )
-
-        # DELETE FROM 语句
-        delete_from = (
-            pp.Keyword("DELETE FROM", caseless=True)("action")
-            + identifier("table_name")
-            + pp.Optional(
-                pp.Keyword("WHERE", caseless=True)
-                + identifier("where_column")
-                + pp.oneOf("= < >")("operator")
-                + value("where_value")
-            )
-        )
-
-        # UPDATE 语句
-        update = (
-            pp.Keyword("UPDATE", caseless=True)("action")
-            + identifier("table_name")
-            + pp.Keyword("SET", caseless=True)
-            + pp.delimitedList(
-                pp.Group(identifier("column") + pp.Suppress("=") + value("value"))
-            )("set_values")
-            + pp.Optional(
-                pp.Keyword("WHERE", caseless=True)
-                + identifier("where_column")
-                + pp.oneOf("= < >")("operator")
-                + value("where_value")
-            )
-        )
-
-        # DROP TABLE 语句
-        drop_table = (
-            pp.Keyword("DROP TABLE", caseless=True)("action")
-            + identifier("table_name")
-        )
-
-        # 组合语法
-        self.grammar = create_table | insert_into | select | alter_table | delete_from | update | drop_table
-
     def parse(self, sql):
-        try:
-            result = self.grammar.parseString(sql, parseAll=True)
-            action = result.get("action").upper()
+        sql = sql.strip().rstrip(';')
+        
+        # 使用正则表达式时忽略大小写
+        if re.match(r'^CREATE\s+TABLE', sql, re.IGNORECASE):
+            return self._parse_create_table(sql)
+        elif re.match(r'^INSERT\s+INTO', sql, re.IGNORECASE):
+            return self._parse_insert_into(sql)
+        elif re.match(r'^SELECT', sql, re.IGNORECASE):
+            return self._parse_select(sql)
+        elif re.match(r'^ALTER\s+TABLE', sql, re.IGNORECASE):
+            return self._parse_alter_table(sql)
+        elif re.match(r'^DELETE\s+FROM', sql, re.IGNORECASE):
+            return self._parse_delete_from(sql)
+        elif re.match(r'^UPDATE', sql, re.IGNORECASE):
+            return self._parse_update(sql)
+        elif re.match(r'^DROP\s+TABLE', sql, re.IGNORECASE):
+            return self._parse_drop_table(sql)
+        elif re.match(r'^BEGIN\s+TRANSACTION$', sql, re.IGNORECASE):
+            return {"action": "BEGIN TRANSACTION"}
+        elif re.match(r'^COMMIT$', sql, re.IGNORECASE):
+            return {"action": "COMMIT"}
+        elif re.match(r'^ROLLBACK$', sql, re.IGNORECASE):
+            return {"action": "ROLLBACK"}
+        else:
+            raise ValueError(f"Unable to parse SQL statement: {sql}")
 
-            if action == "CREATE TABLE":
-                columns = {col["name"]: col["type"].upper() for col in result["columns"]}
-                return {"action": "CREATE TABLE", "table_name": result["table_name"], "columns": columns}
+    def _parse_create_table(self, sql):
+        pattern = r"CREATE\s+TABLE\s+(\w+)\s*\((.+)\)"
+        match = re.match(pattern, sql, re.IGNORECASE)
+        if not match:
+            raise ValueError("CREATE TABLE syntax error.")
+        table_name = match.group(1)
+        columns_str = match.group(2)
+        columns = {}
+        for col_def in columns_str.split(','):
+            parts = col_def.strip().split()
+            if len(parts) != 2:
+                raise ValueError(f"Invalid column definition: {col_def}")
+            col_name, col_type = parts
+            columns[col_name] = col_type
+        return {"action": "CREATE TABLE", "table_name": table_name, "columns": columns}
 
-            elif action == "INSERT INTO":
-                values = result["values"].asList()
-                return {"action": "INSERT INTO", "table_name": result["table_name"], "values": values}
+    def _parse_insert_into(self, sql):
+        pattern = r"INSERT\s+INTO\s+(\w+)\s*\((.+)\)\s+VALUES\s*\((.+)\)"
+        match = re.match(pattern, sql, re.IGNORECASE)
+        if not match:
+            raise ValueError("INSERT INTO syntax error.")
+        table_name = match.group(1)
+        columns = [col.strip() for col in match.group(2).split(',')]
+        values = [val.strip().strip("'") for val in match.group(3).split(',')]
+        return {"action": "INSERT INTO", "table_name": table_name, "columns": columns, "values": values}
 
-            elif action == "SELECT":
-                if result["columns"] == "*":
-                    columns = "*"
-                else:
-                    columns = result["columns"].asList()
-                where = None
-                if "where_column" in result:
-                    where = (result["where_column"], result["operator"], result["where_value"])
-                return {"action": "SELECT", "table_name": result["table_name"], "columns": columns, "where": where}
+    def _parse_select(self, sql):
+        pattern = r"SELECT\s+(.+)\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+))?"
+        match = re.match(pattern, sql, re.IGNORECASE)
+        if not match:
+            raise ValueError("SELECT syntax error.")
+        columns = [col.strip() for col in match.group(1).split(',')]
+        table_name = match.group(2)
+        where_clause = match.group(3)
+        where = None
+        if where_clause:
+            where = self._parse_where(where_clause)
+        return {"action": "SELECT", "columns": columns, "table_name": table_name, "where": where}
 
-            elif action == "ALTER TABLE":
-                operation = result["operation"].upper()
-                parsed = {"action": "ALTER TABLE", "table_name": result["table_name"], "operation": operation}
-                if operation == "ADD COLUMN":
-                    parsed["column_name"] = result["column_name"]
-                    parsed["column_type"] = result["column_type"].upper()
-                elif operation == "DROP COLUMN":
-                    parsed["column_name"] = result["column_name"]
-                elif operation == "MODIFY COLUMN":
-                    parsed["column_name"] = result["column_name"]
-                    parsed["column_type"] = result["column_type"].upper()
-                return parsed
+    def _parse_alter_table(self, sql):
+        pattern_add = r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)\s+(\w+)"
+        pattern_drop = r"ALTER\s+TABLE\s+(\w+)\s+DROP\s+COLUMN\s+(\w+)"
+        pattern_modify = r"ALTER\s+TABLE\s+(\w+)\s+MODIFY\s+COLUMN\s+(\w+)\s+(\w+)"
+        if re.search(r'ADD\s+COLUMN', sql, re.IGNORECASE):
+            match = re.match(pattern_add, sql, re.IGNORECASE)
+            if not match:
+                raise ValueError("ALTER TABLE ADD COLUMN syntax error.")
+            table_name, column_name, column_type = match.groups()
+            return {"action": "ALTER TABLE", "operation": "ADD COLUMN", "table_name": table_name, "column_name": column_name, "column_type": column_type}
+        elif re.search(r'DROP\s+COLUMN', sql, re.IGNORECASE):
+            match = re.match(pattern_drop, sql, re.IGNORECASE)
+            if not match:
+                raise ValueError("ALTER TABLE DROP COLUMN syntax error.")
+            table_name, column_name = match.groups()
+            return {"action": "ALTER TABLE", "operation": "DROP COLUMN", "table_name": table_name, "column_name": column_name}
+        elif re.search(r'MODIFY\s+COLUMN', sql, re.IGNORECASE):
+            match = re.match(pattern_modify, sql, re.IGNORECASE)
+            if not match:
+                raise ValueError("ALTER TABLE MODIFY COLUMN syntax error.")
+            table_name, column_name, column_type = match.groups()
+            return {"action": "ALTER TABLE", "operation": "MODIFY COLUMN", "table_name": table_name, "column_name": column_name, "column_type": column_type}
+        else:
+            raise ValueError("Unsupported ALTER TABLE operation.")
 
-            elif action == "DELETE FROM":
-                where = None
-                if "where_column" in result:
-                    where = (result["where_column"], result["operator"], result["where_value"])
-                return {"action": "DELETE FROM", "table_name": result["table_name"], "where": where}
+    def _parse_delete_from(self, sql):
+        pattern = r"DELETE\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+))?"
+        match = re.match(pattern, sql, re.IGNORECASE)
+        if not match:
+            raise ValueError("DELETE FROM syntax error.")
+        table_name = match.group(1)
+        where_clause = match.group(2)
+        where = None
+        if where_clause:
+            where = self._parse_where(where_clause)
+        return {"action": "DELETE FROM", "table_name": table_name, "where": where}
 
-            elif action == "UPDATE":
-                set_values = {s["column"]: self._convert_value(s["value"]) for s in result["set_values"]}
-                where = None
-                if "where_column" in result:
-                    where = (result["where_column"], result["operator"], self._convert_value(result["where_value"]))
-                return {"action": "UPDATE", "table_name": result["table_name"], "set_values": set_values, "where": where}
+    def _parse_update(self, sql):
+        pattern = r"UPDATE\s+(\w+)\s+SET\s+(.+?)(?:\s+WHERE\s+(.+))?$"
+        match = re.match(pattern, sql, re.IGNORECASE)
+        if not match:
+            raise ValueError("UPDATE syntax error.")
+        table_name = match.group(1)
+        set_clause = match.group(2)
+        where_clause = match.group(3)
+        set_values = {}
+        for assignment in set_clause.split(','):
+            parts = assignment.strip().split('=')
+            if len(parts) != 2:
+                raise ValueError(f"Invalid SET assignment: {assignment}")
+            col, val = parts
+            set_values[col.strip()] = val.strip().strip("'")
+        where = None
+        if where_clause:
+            where = self._parse_where(where_clause)
+        return {"action": "UPDATE", "table_name": table_name, "set_values": set_values, "where": where}
 
-            elif action == "DROP TABLE":
-                return {"action": "DROP TABLE", "table_name": result["table_name"]}
+    def _parse_drop_table(self, sql):
+        pattern = r"DROP\s+TABLE\s+(\w+)"
+        match = re.match(pattern, sql, re.IGNORECASE)
+        if not match:
+            raise ValueError("DROP TABLE syntax error.")
+        table_name = match.group(1)
+        return {"action": "DROP TABLE", "table_name": table_name}
 
-            else:
-                print(f"Unsupported SQL action: {action}")
-                return None
-
-        except pp.ParseException as pe:
-            print(f"SQL Parsing Error: {pe}")
-            return None
-
-    def _convert_value(self, value):
-        try:
-            return int(value)
-        except ValueError:
-            return value.strip("'")
+    def _parse_where(self, clause):
+        # 简单的WHERE子句解析器，支持 "column operator value"
+        pattern = r"(\w+)\s*(=|<|>)\s*('?[\w\s]+'?)"
+        match = re.match(pattern, clause, re.IGNORECASE)
+        if not match:
+            raise ValueError("WHERE clause syntax error.")
+        column, operator, value = match.groups()
+        value = value.strip("'")  # 去除引号
+        # 尝试转换为整数
+        if value.isdigit():
+            value = int(value)
+        return (column, operator, value)

@@ -1,8 +1,34 @@
 # src/database.py
 
+import copy
+
 class Database:
     def __init__(self):
         self.tables = {}
+        self.in_transaction = False
+        self.transaction_backup = None
+
+    def begin_transaction(self):
+        if self.in_transaction:
+            raise ValueError("A transaction is already in progress.")
+        self.transaction_backup = copy.deepcopy(self.tables)
+        self.in_transaction = True
+        print("Transaction started.")
+
+    def commit(self):
+        if not self.in_transaction:
+            raise ValueError("No transaction in progress.")
+        self.transaction_backup = None
+        self.in_transaction = False
+        print("Transaction committed.")
+
+    def rollback(self):
+        if not self.in_transaction:
+            raise ValueError("No transaction in progress.")
+        self.tables = self.transaction_backup
+        self.transaction_backup = None
+        self.in_transaction = False
+        print("Transaction rolled back.")
 
     def create_table(self, table_name, columns):
         if table_name in self.tables:
@@ -49,6 +75,7 @@ class Table:
         self.columns = {col_name: col_type.upper() for col_name, col_type in columns.items()}
         self.column_names = list(columns.keys())
         self.rows = []
+        self.indexes = {}  # 未来可扩展索引功能
 
     def insert_row(self, values):
         if len(values) != len(self.column_names):
@@ -58,18 +85,20 @@ class Table:
         for value, col_name in zip(values, self.column_names):
             col_type = self.columns[col_name]
             try:
-                if col_type == 'INT':
+                if value is None:
+                    converted_values.append(None)
+                elif col_type == 'INT':
                     converted_values.append(int(value))
                 else:
                     converted_values.append(str(value))
             except ValueError:
-                raise ValueError(f"Invalid integer value for column '{col_name}': {value}")
+                raise ValueError(f"Invalid value for column '{col_name}': {value}")
         self.rows.append(converted_values)
         print(f"Inserted into '{self.name}': {converted_values}")
 
     def select(self, columns, where=None):
         # 确认列是否存在
-        if columns == "*":
+        if columns == ["*"]:
             selected_columns = self.column_names
         else:
             for col in columns:
@@ -135,7 +164,7 @@ class Table:
                     else:
                         row[idx] = str(val)
                 except ValueError:
-                    raise ValueError(f"Invalid integer value for column '{col}': {val}")
+                    raise ValueError(f"Invalid value for column '{col}': {val}")
             update_count += 1
         print(f"Updated {update_count} row(s) in '{self.name}'.")
 
@@ -162,7 +191,7 @@ class Table:
             return left > right
         else:
             raise ValueError(f"Unsupported operator '{operator}'")
-    
+
     def add_column(self, column_name, column_type):
         if column_name in self.columns:
             print(f"Column '{column_name}' already exists in table '{self.name}'.")
@@ -172,7 +201,7 @@ class Table:
         # 为现有行添加默认值 None
         for row in self.rows:
             row.append(None)
-        print(f"Added column '{column_name}' of type '{column_type}' to table '{self.name}'")
+        print(f"Added column '{column_name}' of type '{column_type}' to table '{self.name}'.")
 
     def drop_column(self, column_name):
         if column_name not in self.columns:
@@ -183,11 +212,11 @@ class Table:
         self.column_names.remove(column_name)
         for row in self.rows:
             del row[idx]
-        print(f"Dropped column '{column_name}' from table '{self.name}'")
+        print(f"Dropped column '{column_name}' from table '{self.name}'.")
 
     def modify_column(self, column_name, new_column_type):
         if column_name not in self.columns:
             print(f"Column '{column_name}' does not exist in table '{self.name}'.")
             return
         self.columns[column_name] = new_column_type.upper()
-        print(f"Modified column '{column_name}' to type '{new_column_type}' in table '{self.name}'")
+        print(f"Modified column '{column_name}' to type '{new_column_type}' in table '{self.name}'.")

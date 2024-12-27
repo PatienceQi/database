@@ -1,171 +1,361 @@
-﻿import unittest
-from src.sql_parser import SQLParser
+﻿# tests/test_sql.py
+
+import unittest
+from io import StringIO
+import sys
+
+# 确保可以导入 src 包
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from src.query_executor import QueryExecutor
-from src.database import Database
 
-
-class TestSQLParserAndExecutor(unittest.TestCase):
-
+class TestSQLExecutor(unittest.TestCase):
     def setUp(self):
-        """Setup the initial environment for each test"""
-        self.database = Database()
-        self.executor = QueryExecutor(self.database)
-        self.parser = SQLParser()
+        """初始化 QueryExecutor 实例，每个测试用例前都会执行"""
+        self.executor = QueryExecutor()
 
     def test_create_table(self):
-        """Test the CREATE TABLE SQL command"""
-        sql = "CREATE TABLE users (id INT, name STRING)"
-        self.executor.execute(sql)
+        """测试创建表功能"""
+        create_sql = "CREATE TABLE students (id INT, name TEXT)"
+        self.executor.execute(create_sql)
+        
+        # 检查表是否存在
+        self.assertIn('students', self.executor.database.tables)
+        
+        # 检查表的列定义
+        table = self.executor.database.get_table('students')
+        self.assertEqual(table.columns, {'id': 'INT', 'name': 'TEXT'})
+        self.assertEqual(table.column_names, ['id', 'name'])
+        self.assertEqual(table.rows, [])
 
-        # Check if the table was created correctly
-        table = self.database.get_table("users")
-        self.assertIsNotNone(table)
-        self.assertEqual(table.name, "users")
-        self.assertEqual(table.columns, {"id": "INT", "name": "STRING"})
-        print("CREATE TABLE test passed.")
+    def test_create_existing_table(self):
+        """测试创建已存在的表应抛出错误"""
+        create_sql = "CREATE TABLE students (id INT, name TEXT)"
+        self.executor.execute(create_sql)
+        
+        with self.assertRaises(ValueError) as context:
+            self.executor.execute(create_sql)
+        
+        self.assertIn("Table 'students' already exists.", str(context.exception))
 
-    def test_insert_into(self):
-        """Test the INSERT INTO SQL command"""
-        sql = "CREATE TABLE users (id INT, name STRING)"
-        self.executor.execute(sql)
-
-        # Insert values into the table
-        sql_insert = "INSERT INTO users VALUES (1, 'Alice')"
-        self.executor.execute(sql_insert)
-
-        # Verify the row is inserted correctly
-        table = self.database.get_table("users")
+    def test_insert_into_table(self):
+        """测试向表中插入数据"""
+        create_sql = "CREATE TABLE students (id INT, name TEXT)"
+        self.executor.execute(create_sql)
+        
+        insert_sql = "INSERT INTO students (id, name) VALUES (1, 'Alice')"
+        self.executor.execute(insert_sql)
+        
+        table = self.executor.database.get_table('students')
         self.assertEqual(len(table.rows), 1)
         self.assertEqual(table.rows[0], [1, 'Alice'])
-        print("INSERT INTO test passed.")
 
-    def test_select(self):
-        """Test the SELECT SQL command"""
-        sql = "CREATE TABLE users (id INT, name STRING)"
-        self.executor.execute(sql)
+    def test_insert_into_nonexistent_table(self):
+        """测试向不存在的表中插入数据应抛出错误"""
+        insert_sql = "INSERT INTO students (id, name) VALUES (1, 'Alice')"
+        
+        with self.assertRaises(ValueError) as context:
+            self.executor.execute(insert_sql)
+        
+        self.assertIn("Table 'students' does not exist.", str(context.exception))
 
-        # Insert values into the table
-        sql_insert_1 = "INSERT INTO users VALUES (1, 'Alice')"
-        self.executor.execute(sql_insert_1)
-        sql_insert_2 = "INSERT INTO users VALUES (2, 'Bob')"
-        self.executor.execute(sql_insert_2)
+    def test_select_all(self):
+        """测试选择所有列的数据"""
+        create_sql = "CREATE TABLE students (id INT, name TEXT)"
+        self.executor.execute(create_sql)
+        self.executor.execute("INSERT INTO students (id, name) VALUES (1, 'Alice')")
+        self.executor.execute("INSERT INTO students (id, name) VALUES (2, 'Bob')")
 
-        # Select values from the table
-        sql_select = "SELECT id, name FROM users WHERE name = 'Alice'"
-        self.executor.execute(sql_select)
+        # 捕获标准输出
+        captured_output = StringIO()
+        sys.stdout = captured_output
 
-        # The results should only include Alice's row
-        table = self.database.get_table("users")
-        results = table.select(columns=["id", "name"], where=("name", "=", "Alice"))
-        self.assertEqual(results, [[1, 'Alice']])
-        print("SELECT test passed.")
+        select_sql = "SELECT * FROM students"
+        self.executor.execute(select_sql)
 
-    def test_alter_table_add_column(self):
-        """Test ALTER TABLE ADD COLUMN"""
-        sql = "CREATE TABLE users (id INT, name STRING)"
-        self.executor.execute(sql)
+        # 恢复标准输出
+        sys.stdout = sys.__stdout__
+        output = captured_output.getvalue()
 
-        # Add a new column to the table
-        sql_alter = "ALTER TABLE users ADD COLUMN age INT"
-        self.executor.execute(sql_alter)
+        # 检查输出内容
+        self.assertIn("id\tname", output)
+        self.assertIn("1\tAlice", output)
+        self.assertIn("2\tBob", output)
 
-        # Verify the column was added
-        table = self.database.get_table("users")
-        self.assertIn("age", table.columns)
-        print("ALTER TABLE ADD COLUMN test passed.")
+    def test_select_with_where(self):
+        """测试带有 WHERE 子句的选择操作"""
+        create_sql = "CREATE TABLE students (id INT, name TEXT)"
+        self.executor.execute(create_sql)
+        self.executor.execute("INSERT INTO students (id, name) VALUES (1, 'Alice')")
+        self.executor.execute("INSERT INTO students (id, name) VALUES (2, 'Bob')")
 
-    def test_alter_table_drop_column(self):
-        """Test ALTER TABLE DROP COLUMN"""
-        sql = "CREATE TABLE users (id INT, name STRING, age INT)"
-        self.executor.execute(sql)
+        # 捕获标准输出
+        captured_output = StringIO()
+        sys.stdout = captured_output
 
-        # Drop a column
-        sql_alter = "ALTER TABLE users DROP COLUMN age"
-        self.executor.execute(sql_alter)
+        select_sql = "SELECT name FROM students WHERE id = 1"
+        self.executor.execute(select_sql)
 
-        # Verify the column was dropped
-        table = self.database.get_table("users")
-        self.assertNotIn("age", table.columns)
-        print("ALTER TABLE DROP COLUMN test passed.")
+        # 恢复标准输出
+        sys.stdout = sys.__stdout__
+        output = captured_output.getvalue()
 
-    def test_alter_table_modify_column(self):
-        """Test ALTER TABLE MODIFY COLUMN"""
-        sql = "CREATE TABLE users (id INT, name STRING)"
-        self.executor.execute(sql)
+        # 检查输出内容
+        self.assertIn("name", output)
+        self.assertIn("Alice", output)
+        self.assertNotIn("Bob", output)
 
-        # Modify a column's data type
-        sql_alter = "ALTER TABLE users MODIFY COLUMN name INT"
-        self.executor.execute(sql_alter)
+    def test_update_rows(self):
+        """测试更新表中的数据"""
+        create_sql = "CREATE TABLE students (id INT, name TEXT)"
+        self.executor.execute(create_sql)
+        self.executor.execute("INSERT INTO students (id, name) VALUES (1, 'Alice')")
+        self.executor.execute("INSERT INTO students (id, name) VALUES (2, 'Bob')")
 
-        # Verify the column's type was modified
-        table = self.database.get_table("users")
-        self.assertEqual(table.columns["name"], "INT")
-        print("ALTER TABLE MODIFY COLUMN test passed.")
+        update_sql = "UPDATE students SET name = 'Charlie' WHERE id = 1"
+        self.executor.execute(update_sql)
 
-    def test_create_table_error(self):
-        """Test CREATE TABLE with an existing table"""
-        sql = "CREATE TABLE users (id INT, name STRING)"
-        self.executor.execute(sql)
+        table = self.executor.database.get_table('students')
+        self.assertEqual(table.rows[0], [1, 'Charlie'])
+        self.assertEqual(table.rows[1], [2, 'Bob'])
 
-        # Try to create the same table again (should raise an error)
-        sql_duplicate = "CREATE TABLE users (id INT, name STRING)"
-        self.executor.execute(sql_duplicate)  # Expected to print error message
+    def test_delete_rows(self):
+        """测试删除表中的数据"""
+        create_sql = "CREATE TABLE students (id INT, name TEXT)"
+        self.executor.execute(create_sql)
+        self.executor.execute("INSERT INTO students (id, name) VALUES (1, 'Alice')")
+        self.executor.execute("INSERT INTO students (id, name) VALUES (2, 'Bob')")
 
-        print("CREATE TABLE error test passed.")
+        delete_sql = "DELETE FROM students WHERE id = 1"
+        self.executor.execute(delete_sql)
 
-    def test_insert_into_error(self):
-        """Test INSERT INTO with incorrect column count"""
-        sql = "CREATE TABLE users (id INT, name STRING)"
-        self.executor.execute(sql)
+        table = self.executor.database.get_table('students')
+        self.assertEqual(len(table.rows), 1)
+        self.assertEqual(table.rows[0], [2, 'Bob'])
 
-        # Try to insert values with incorrect column count (should raise an error)
-        sql_insert = "INSERT INTO users VALUES (1)"
-        self.executor.execute(sql_insert)  # Expected to print error message
+    def test_alter_add_column(self):
+        """测试添加列到表中"""
+        create_sql = "CREATE TABLE students (id INT, name TEXT)"
+        self.executor.execute(create_sql)
 
-        print("INSERT INTO error test passed.")
+        alter_sql = "ALTER TABLE students ADD COLUMN age INT"
+        self.executor.execute(alter_sql)
 
-    def test_select_column_not_found(self):
-        """Test SELECT with a non-existent column"""
-        sql = "CREATE TABLE users (id INT, name STRING)"
-        self.executor.execute(sql)
+        table = self.executor.database.get_table('students')
+        self.assertIn('age', table.columns)
+        self.assertEqual(table.column_names, ['id', 'name', 'age'])
 
-        # Try to select a non-existent column
-        sql_select = "SELECT non_existent_column FROM users"
-        self.executor.execute(sql_select)  # Expected to print error message
+        # 插入包含新列的数据
+        self.executor.execute("INSERT INTO students (id, name, age) VALUES (1, 'Alice', 20)")
+        self.executor.execute("INSERT INTO students (id, name, age) VALUES (2, 'Bob', 22)")
 
-        print("SELECT column not found test passed.")
+        table = self.executor.database.get_table('students')
+        self.assertEqual(table.rows[0], [1, 'Alice', 20])
+        self.assertEqual(table.rows[1], [2, 'Bob', 22])
 
-    def test_alter_table_column_not_found(self):
-        """Test ALTER TABLE with a non-existent column"""
-        sql = "CREATE TABLE users (id INT, name STRING)"
-        self.executor.execute(sql)
+    def test_alter_drop_column(self):
+        """测试从表中删除列"""
+        create_sql = "CREATE TABLE students (id INT, name TEXT, age INT)"
+        self.executor.execute(create_sql)
 
-        # Try to drop a non-existent column
-        sql_alter = "ALTER TABLE users DROP COLUMN age"
-        self.executor.execute(sql_alter)  # Expected to print error message
+        alter_sql = "ALTER TABLE students DROP COLUMN age"
+        self.executor.execute(alter_sql)
 
-        print("ALTER TABLE column not found test passed.")
+        table = self.executor.database.get_table('students')
+        self.assertNotIn('age', table.columns)
+        self.assertEqual(table.column_names, ['id', 'name'])
 
-    def test_select_where_condition(self):
-        """Test SELECT with WHERE condition"""
-        sql = "CREATE TABLE users (id INT, name STRING)"
-        self.executor.execute(sql)
+    def test_alter_modify_column(self):
+        """测试修改列的数据类型"""
+        create_sql = "CREATE TABLE students (id INT, name TEXT)"
+        self.executor.execute(create_sql)
 
-        # Insert values into the table
-        sql_insert_1 = "INSERT INTO users VALUES (1, 'Alice')"
-        self.executor.execute(sql_insert_1)
-        sql_insert_2 = "INSERT INTO users VALUES (2, 'Bob')"
-        self.executor.execute(sql_insert_2)
+        alter_sql = "ALTER TABLE students MODIFY COLUMN name INT"
+        self.executor.execute(alter_sql)
 
-        # Select with WHERE condition
-        sql_select = "SELECT id FROM users WHERE name = 'Alice'"
-        self.executor.execute(sql_select)
+        table = self.executor.database.get_table('students')
+        self.assertEqual(table.columns['name'], 'INT')
 
-        # The result should only include the row for Alice
-        table = self.database.get_table("users")
-        results = table.select(columns=["id"], where=("name", "=", "Alice"))
-        self.assertEqual(results, [[1]])
-        print("SELECT WHERE condition test passed.")
+        # 尝试插入无法转换为 INT 的值应抛出错误
+        insert_sql = "INSERT INTO students (id, name) VALUES (1, 'Alice')"
+        with self.assertRaises(ValueError) as context:
+            self.executor.execute(insert_sql)
+        
+        self.assertIn("Invalid value for column 'name': Alice", str(context.exception))
 
-if __name__ == "__main__":
+    def test_drop_table(self):
+        """测试删除表"""
+        create_sql = "CREATE TABLE students (id INT, name TEXT)"
+        self.executor.execute(create_sql)
+
+        drop_sql = "DROP TABLE students"
+        self.executor.execute(drop_sql)
+
+        self.assertNotIn('students', self.executor.database.tables)
+
+    def test_begin_commit_transaction(self):
+        """测试事务的开始与提交"""
+        create_sql = "CREATE TABLE students (id INT, name TEXT)"
+        self.executor.execute(create_sql)
+
+        self.executor.execute("BEGIN TRANSACTION")
+        self.executor.execute("INSERT INTO students (id, name) VALUES (1, 'Alice')")
+        self.executor.execute("COMMIT")
+
+        table = self.executor.database.get_table('students')
+        self.assertEqual(len(table.rows), 1)
+        self.assertEqual(table.rows[0], [1, 'Alice'])
+
+    def test_begin_rollback_transaction(self):
+        """测试事务的开始与回滚"""
+        create_sql = "CREATE TABLE students (id INT, name TEXT)"
+        self.executor.execute(create_sql)
+
+        self.executor.execute("BEGIN TRANSACTION")
+        self.executor.execute("INSERT INTO students (id, name) VALUES (1, 'Alice')")
+        self.executor.execute("ROLLBACK")
+
+        table = self.executor.database.get_table('students')
+        self.assertEqual(len(table.rows), 0)
+
+    def test_nested_transaction(self):
+        """测试嵌套事务应抛出错误"""
+        self.executor.execute("BEGIN TRANSACTION")
+        
+        with self.assertRaises(ValueError) as context:
+            self.executor.execute("BEGIN TRANSACTION")
+        
+        self.assertIn("A transaction is already in progress.", str(context.exception))
+
+    def test_transaction_commit_without_begin(self):
+        """测试在未开始事务的情况下提交应抛出错误"""
+        with self.assertRaises(ValueError) as context:
+            self.executor.execute("COMMIT")
+        
+        self.assertIn("No transaction in progress.", str(context.exception))
+
+    def test_transaction_rollback_without_begin(self):
+        """测试在未开始事务的情况下回滚应抛出错误"""
+        with self.assertRaises(ValueError) as context:
+            self.executor.execute("ROLLBACK")
+        
+        self.assertIn("No transaction in progress.", str(context.exception))
+
+    def test_invalid_sql(self):
+        """测试无效的 SQL 语句应抛出错误"""
+        invalid_sql = "INVALID SQL"
+        
+        with self.assertRaises(ValueError) as context:
+            self.executor.execute(invalid_sql)
+        
+        self.assertIn("Unable to parse SQL statement", str(context.exception))
+
+    def test_insert_missing_columns(self):
+        """测试插入时缺少部分列，系统应为缺失的列赋予默认值 'None'"""
+        create_sql = "CREATE TABLE students (id INT, name TEXT, age INT)"
+        self.executor.execute(create_sql)
+
+        insert_sql = "INSERT INTO students (id, name) VALUES (1, 'Alice')"
+        self.executor.execute(insert_sql)
+
+        table = self.executor.database.get_table('students')
+        self.assertEqual(len(table.rows), 1)
+        self.assertEqual(table.rows[0], [1, 'Alice', 'None'])
+
+    def test_insert_extra_columns(self):
+        """测试插入时包含额外的列应抛出错误"""
+        create_sql = "CREATE TABLE students (id INT, name TEXT)"
+        self.executor.execute(create_sql)
+
+        insert_sql = "INSERT INTO students (id, name, age) VALUES (1, 'Alice', 20)"
+        
+        with self.assertRaises(ValueError) as context:
+            self.executor.execute(insert_sql)
+        
+        self.assertIn("Column 'age' does not exist in table 'students'.", str(context.exception))
+
+    def test_update_nonexistent_column(self):
+        """测试更新不存在的列应抛出错误"""
+        create_sql = "CREATE TABLE students (id INT, name TEXT)"
+        self.executor.execute(create_sql)
+        self.executor.execute("INSERT INTO students (id, name) VALUES (1, 'Alice')")
+
+        update_sql = "UPDATE students SET age = 20 WHERE id = 1"
+        
+        with self.assertRaises(ValueError) as context:
+            self.executor.execute(update_sql)
+        
+        self.assertIn("Column 'age' does not exist in table 'students'.", str(context.exception))
+
+    def test_delete_all_rows(self):
+        """测试删除表中的所有行"""
+        create_sql = "CREATE TABLE students (id INT, name TEXT)"
+        self.executor.execute(create_sql)
+        self.executor.execute("INSERT INTO students (id, name) VALUES (1, 'Alice')")
+        self.executor.execute("INSERT INTO students (id, name) VALUES (2, 'Bob')")
+
+        delete_sql = "DELETE FROM students"
+        self.executor.execute(delete_sql)
+
+        table = self.executor.database.get_table('students')
+        self.assertEqual(len(table.rows), 0)
+
+    def test_drop_nonexistent_table(self):
+        """测试删除不存在的表应抛出错误"""
+        drop_sql = "DROP TABLE students"
+        
+        with self.assertRaises(ValueError) as context:
+            self.executor.execute(drop_sql)
+        
+        self.assertIn("Table 'students' does not exist.", str(context.exception))
+
+    def test_add_existing_column(self):
+        """测试添加已存在的列应忽略或抛出错误"""
+        create_sql = "CREATE TABLE students (id INT, name TEXT)"
+        self.executor.execute(create_sql)
+
+        alter_sql = "ALTER TABLE students ADD COLUMN name TEXT"
+        # 根据 Table.add_column 的实现，添加已存在的列会打印消息但不抛出错误
+        captured_output = StringIO()
+        sys.stdout = captured_output
+
+        self.executor.execute(alter_sql)
+
+        sys.stdout = sys.__stdout__
+        output = captured_output.getvalue()
+        self.assertIn("Column 'name' already exists in table 'students'.", output)
+
+    def test_drop_nonexistent_column(self):
+        """测试删除不存在的列应打印消息但不抛出错误"""
+        create_sql = "CREATE TABLE students (id INT, name TEXT)"
+        self.executor.execute(create_sql)
+
+        alter_sql = "ALTER TABLE students DROP COLUMN age"
+        captured_output = StringIO()
+        sys.stdout = captured_output
+
+        self.executor.execute(alter_sql)
+
+        sys.stdout = sys.__stdout__
+        output = captured_output.getvalue()
+        self.assertIn("Column 'age' does not exist in table 'students'.", output)
+
+    def test_modify_nonexistent_column(self):
+        """测试修改不存在的列应打印消息但不抛出错误"""
+        create_sql = "CREATE TABLE students (id INT, name TEXT)"
+        self.executor.execute(create_sql)
+
+        alter_sql = "ALTER TABLE students MODIFY COLUMN age INT"
+        captured_output = StringIO()
+        sys.stdout = captured_output
+
+        self.executor.execute(alter_sql)
+
+        sys.stdout = sys.__stdout__
+        output = captured_output.getvalue()
+        self.assertIn("Column 'age' does not exist in table 'students'.", output)
+
+if __name__ == '__main__':
     unittest.main()

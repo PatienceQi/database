@@ -36,8 +36,14 @@ class QueryExecutor:
             self._execute_update(parsed)
         elif action == 'DROP TABLE':
             self._execute_drop_table(parsed)
+        elif action == 'BEGIN TRANSACTION':
+            self._execute_begin_transaction()
+        elif action == 'COMMIT':
+            self._execute_commit()
+        elif action == 'ROLLBACK':
+            self._execute_rollback()
         else:
-            print(f"Unsupported SQL statement: {sql}")
+            raise ValueError(f"Unsupported SQL statement: {sql}")
 
     def _execute_create_table(self, parsed):
         table_name = parsed['table_name']
@@ -49,9 +55,25 @@ class QueryExecutor:
 
     def _execute_insert_into(self, parsed):
         table_name = parsed['table_name']
+        columns = parsed.get('columns')
         values = parsed['values']
         try:
-            self.database.insert_into(table_name, values)
+            if columns and columns != self.database.get_table(table_name).column_names:
+                # 如果指定了列名，需按列名顺序插入
+                table = self.database.get_table(table_name)
+                ordered_values = [None] * len(table.column_names)
+                for col, val in zip(columns, values):
+                    if col not in table.column_names:
+                        raise ValueError(f"Column '{col}' does not exist in table '{table_name}'.")
+                    idx = table.column_names.index(col)
+                    ordered_values[idx] = val
+                # 填充未指定的列为 None
+                for i in range(len(ordered_values)):
+                    if ordered_values[i] is None:
+                        ordered_values[i] = "None"
+                self.database.insert_into(table_name, ordered_values)
+            else:
+                self.database.insert_into(table_name, values)
         except ValueError as e:
             print(e)
 
@@ -61,10 +83,15 @@ class QueryExecutor:
         where = parsed.get('where')
         try:
             results = self.database.select_from(table_name, columns, where)
+            # 打印结果
+            if columns == ["*"]:
+                print("\t".join(self.database.get_table(table_name).column_names))
+            else:
+                print("\t".join(columns))
             for row in results:
-                print(row)
+                print("\t".join(map(str, row)))
         except ValueError as e:
-            print(e)
+            raise e
 
     def _execute_alter_table(self, parsed):
         table_name = parsed['table_name']
@@ -109,5 +136,23 @@ class QueryExecutor:
         table_name = parsed['table_name']
         try:
             self.database.drop_table(table_name)
+        except ValueError as e:
+            print(e)
+
+    def _execute_begin_transaction(self):
+        try:
+            self.database.begin_transaction()
+        except ValueError as e:
+            print(e)
+
+    def _execute_commit(self):
+        try:
+            self.database.commit()
+        except ValueError as e:
+            print(e)
+
+    def _execute_rollback(self):
+        try:
+            self.database.rollback()
         except ValueError as e:
             print(e)

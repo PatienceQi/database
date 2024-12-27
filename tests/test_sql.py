@@ -3,10 +3,9 @@
 import unittest
 from io import StringIO
 import sys
+import os
 
 # 确保可以导入 src 包
-import sys
-import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.query_executor import QueryExecutor
@@ -253,7 +252,7 @@ class TestSQLExecutor(unittest.TestCase):
         self.assertIn("Unable to parse SQL statement", str(context.exception))
 
     def test_insert_missing_columns(self):
-        """测试插入时缺少部分列，系统应为缺失的列赋予默认值 'None'"""
+        """测试插入时缺少部分列，系统应为缺失的列赋予默认值 None"""
         create_sql = "CREATE TABLE students (id INT, name TEXT, age INT)"
         self.executor.execute(create_sql)
 
@@ -262,7 +261,7 @@ class TestSQLExecutor(unittest.TestCase):
 
         table = self.executor.database.get_table('students')
         self.assertEqual(len(table.rows), 1)
-        self.assertEqual(table.rows[0], [1, 'Alice', 'None'])
+        self.assertEqual(table.rows[0], [1, 'Alice', None])  # 改为 None 而不是 'None'
 
     def test_insert_extra_columns(self):
         """测试插入时包含额外的列应抛出错误"""
@@ -312,7 +311,7 @@ class TestSQLExecutor(unittest.TestCase):
         self.assertIn("Table 'students' does not exist.", str(context.exception))
 
     def test_add_existing_column(self):
-        """测试添加已存在的列应忽略或抛出错误"""
+        """测试添加已存在的列应打印消息但不抛出错误"""
         create_sql = "CREATE TABLE students (id INT, name TEXT)"
         self.executor.execute(create_sql)
 
